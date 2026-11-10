@@ -1,0 +1,61 @@
+================================================================================
+TDSE - Trabajo Práctico N° 4: ADC + PWM
+Implementación de control de brillo de LED mediante potenciómetro
+================================================================================
+
+
+1. CONFIGURACIÓN DE PERIFÉRICOS
+A) Conversor Analógico-Digital (ADC1):
+   - Modo: Independent mode.
+   - Entrada: Canal 0 (ADC_CHANNEL_0) asignado al pin PA0 (PA0-WKUP).
+   - Data Alignment: Right alignment (alineación a la derecha), produciendo una
+     salida de 12 bits con valores numéricos directos de 0 a 4095.
+   - Scan Conversion Mode: Disabled (se mide únicamente un canal).
+   - Continuous Conversion Mode: Disabled (la conversión se inicia bajo demanda 
+     en cada ciclo de ejecución de la tarea periódica task_adc).
+   - Discontinuous Conversion Mode: Disabled.
+   - Regular Conversion:
+     * Number of Conversion: 1.
+     * External Trigger Conversion Source: Regular Conversion launched by software
+       (se dispara por software mediante HAL_ADC_Start).
+     * Sampling Time: Configurado en 71.5 ciclos (ADC_SAMPLETIME_71CYCLES_5) para 
+       asegurar un tiempo de carga suficiente del capacitor de muestreo interno y 
+       evitar lecturas ruidosas debidas a la impedancia del potenciómetro.
+   - NVIC / DMA: Deshabilitados, ya que la lectura se realiza mediante polling.
+
+B) Temporizador para PWM (TIM3):
+   - Canal: Canal 1 (TIM3_CH1) en modo PWM Generation CH1 sobre el pin PA6.
+   - Modo de salida: PWM Mode 1 (activo en alto mientras el contador < CCR1).
+   - Período (ARR): 65535 (resolución de 16 bits).
+
+
+2. MODIFICACIONES IMPLEMENTADAS EN FIRMWARE
+En el archivo app/src/task_pwm.c:
+
+A) Eliminación de la rampa de prueba y función setPWM:
+   - Se removió la variable `step` que generaba un barrido automático artificial.
+   - Se descartó la función auxiliar `setPWM()`, la cual detenía y reinicializaba 
+     el temporizador en cada llamada (HAL_TIM_PWM_Stop, HAL_TIM_PWM_Init, etc.).
+
+B) Inicialización del PWM (task_pwm_init):
+   - El temporizador se arranca una única vez al inicio del sistema mediante la 
+     función de HAL:
+     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+
+C) Lógica de actualización (task_pwm_update):
+   - Se evalúa si finalizó una nueva conversión verificando:
+     `shared_data->adc_end_of_conversion`.
+   - Se limpia la bandera (`false`) para consumir el evento y evitar reprocesar la
+     misma lectura en los sigueintes ciclos.
+   - Se toma el valor actual digitalizado `shared_data->adc_value` (rango 0 a 4095)
+     y se escala linealmente para calcular el tiempo activo (pulse / compare register)
+     dentro del período de 16 bits:
+
+        pwm_active = ((uint32_t)shared_data->adc_value * period) / 4095;
+
+     * Se aplica un cast explícito a `uint32_t` para evitar el desbordamiento de 
+       16 bits durante el producto (4095 * 65535 ≈ 2.68 x 10^8).
+   - Se actualiza el ciclo de trabajo de manera inmediata modificando
+     el registro de comparación del timer a través de la macro provista por HAL:
+     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, shared_data->pwm_active);
+

@@ -1,1 +1,5 @@
-Debug
+Debug/
+.idea/
+cmake-build-*/
+CMakeLists.txt
+CMakeLists_template.txt
